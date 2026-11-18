@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Product</title>
+  <link rel="icon" href="data:,">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <link rel="stylesheet" href="css/style.css?v=8">
+</head>
+<body>
+  <header></header>
+  <main>
+    <p><a href="index.html">Back to shop</a></p>
+    <div id="product"><p class="muted">Loading…</p></div>
+  </main>
+
+  <script type="module">
+    import { sb, $, esc, rupees, renderHeader, addToCart } from './js/common.js?v=7';
+
+    await renderHeader();
+    const id = new URLSearchParams(location.search).get('id');
+    const { data: p } = id
+      ? await sb.from('products').select('*').eq('id', id).maybeSingle()
+      : { data: null };
+
+    if (!p) {
+      $('#product').innerHTML = '<p>This product isn’t available. <a href="index.html">See everything in the shop</a></p>';
+    } else {
+      document.title = `${p.name} · ${document.title.split(' · ').pop()}`;
+      $('#product').innerHTML = `
+        <article class="detail">
+          <img src="${esc(p.image_url)}" alt="${esc(p.name)}">
+          <div>
+            <p class="muted">${p.category === 'book' ? 'Book' : 'Dress'}</p>
+            <h1>${esc(p.name)}</h1>
+            <p class="muted">${esc(p.details)}</p>
+            <p class="price">${rupees(p.price)}</p>
+            <p class="desc">${esc(p.description)}</p>
+            ${p.stock > 0
+              ? `<button id="add">Add to cart</button><p class="muted">${p.stock <= 3 ? `Only ${p.stock} left` : 'In stock'}</p>`
+              : '<button disabled>Out of stock</button>'}
+          </div>
+        </article>`;
+      $('#add')?.addEventListener('click', () => addToCart(p));
+    }
+  </script>
+</body>
+</html>

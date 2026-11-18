@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin</title>
+  <link rel="icon" href="data:,">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <link rel="stylesheet" href="css/style.css?v=8">
+</head>
+<body>
+  <header></header>
+  <main>
+    <form id="login" class="card" style="max-width:420px;margin:0 auto" hidden>
+      <h1>Admin login</h1>
+      <label>Username <input name="username" required autocomplete="username" autocapitalize="none" spellcheck="false"></label>
+      <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
+      <div id="captcha" class="captcha"></div>
+      <button style="width:100%">Login</button>
+    </form>
+
+    <!-- Two-step login: first time scan a QR code, afterwards enter the 6-digit code. -->
+    <form id="mfa" class="card" style="max-width:420px;margin:0 auto" hidden>
+      <h1>Two-step login</h1>
+      <div id="mfa-enroll" hidden>
+        <p>Scan this QR code with an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password…), then enter the 6-digit code it shows.</p>
+        <img id="mfa-qr" class="mfa-qr" alt="QR code for your authenticator app">
+        <p class="muted">Can’t scan? Enter this key in the app: <code id="mfa-secret"></code></p>
+      </div>
+      <p id="mfa-verify-text" hidden>Enter the 6-digit code from your authenticator app.</p>
+      <label>Code <input name="code" class="code-input" required inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code"></label>
+      <button style="width:100%">Verify</button>
+      <p><button type="button" class="small secondary" id="logout-mfa">Cancel and log out</button></p>
+    </form>
+
+    <section id="denied" class="card" hidden>
+      <p>This login doesn’t have admin access.</p>
+      <button class="secondary" id="logout-denied">Log out</button>
+    </section>
+
+    <div id="panel" hidden>
+      <div class="tabs">
+        <button class="chip" data-tab="products" aria-pressed="true">Products</button>
+        <button class="chip" data-tab="orders" aria-pressed="false">Orders</button>
+      </div>
+
+      <section id="products">
+        <div class="two-col">
+          <form id="product-form" class="card">
+            <h2 style="margin-top:0" id="form-title">Add product</h2>
+            <input type="hidden" name="id">
+            <label>Name <input name="name" required></label>
+            <div class="row">
+              <label>Category
+                <select name="category"><option value="book">Book</option><option value="dress">Dress</option></select>
+              </label>
+              <label>Price (₹) <input name="price" type="number" min="1" step="0.01" required></label>
+            </div>
+            <div class="row">
+              <label>Stock <input name="stock" type="number" min="0" step="1" required value="1"></label>
+              <label>Details <input name="details" placeholder="Author / sizes / fabric"></label>
+            </div>
+            <label>Image URL <input name="image_url" type="url" required placeholder="https://…"></label>
+            <img id="preview" alt="Image preview" style="max-height:160px;width:auto;border-radius:8px" hidden>
+            <label>Description <textarea name="description" rows="3"></textarea></label>
+            <label class="check"><input type="checkbox" name="active" checked> Visible in shop</label>
+            <div style="display:flex;gap:8px">
+              <button>Save product</button>
+              <button type="button" class="secondary" id="reset">New</button>
+            </div>
+          </form>
+          <div class="card table-wrap">
+            <table>
+              <thead><tr><th></th><th>Name</th><th>Price</th><th>Stock</th><th></th></tr></thead>
+              <tbody id="product-rows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="orders" hidden>
+        <div class="card" id="order-rows"></div>
+      </section>
+    </div>
+  </main>
+
+  <script type="module">
+    import { sb, $, esc, rupees, toast, renderHeader, isAdmin, mountCaptcha } from './js/common.js?v=7';
+
+    const user = await renderHeader();
+    const logout = async () => { await sb.auth.signOut(); location.reload(); };
+    const level = user ? (await sb.auth.mfa.getAuthenticatorAssuranceLevel()).data?.currentLevel : null;
+
+    if (!user) {
+      $('#login').hidden = false;
+      const captcha = mountCaptcha($('#captcha'));
+      $('#login').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const { username, password } = Object.fromEntries(new FormData(e.target));
+        // Admin usernames map to internal addresses, e.g. "admin" -> admin@shop.admin.
+        const name = username.trim().toLowerCase();
+        const email = name.includes('@') ? name : `${name}@shop.admin`;
+        const captchaToken = captcha.token();
+        if ($('#captcha').childElementCount && !captchaToken) return toast('Please complete the “verify you are human” check', true);
+        const { error } = await sb.auth.signInWithPassword({ email, password, options: { captchaToken } });
+        captcha.reset();
+        if (error) return toast('Wrong username or password', true);
+        location.reload();
+      });
+    } else if (!(await isAdmin(user))) {
+      $('#denied').hidden = false;
+      $('#logout-denied').addEventListener('click', logout);
+    } else if (level !== 'aal2') {
+      // Password is right; now the authenticator code. Enroll first if this admin has no verified app yet.
+      $('#mfa').hidden = false;
+      $('#logout-mfa').addEventListener('click', logout);
+      const { data: factors } = await sb.auth.mfa.listFactors();
+      let factorId = factors?.totp?.[0]?.id; // only verified factors are listed here
+      if (factorId) {
+        $('#mfa-verify-text').hidden = false;
+      } else {
+        // Drop half-finished enrollments from earlier attempts, then start a fresh one.
+        for (const f of factors?.all ?? []) if (f.status !== 'verified') await sb.auth.mfa.unenroll({ factorId: f.id });
+        const { data, error } = await sb.auth.mfa.enroll({ factorType: 'totp' });
+        if (error) toast(error.message, true);
+        else {
+          factorId = data.id;
+          $('#mfa-qr').src = data.totp.qr_code;
+          $('#mfa-secret').textContent = data.totp.secret;
+          $('#mfa-enroll').hidden = false;
+        }
+      }
+      $('#mfa').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const { error } = await sb.auth.mfa.challengeAndVerify({ factorId, code: e.target.code.value.trim() });
+        if (error) return toast('That code didn’t work. Check the app and try again.', true);
+        location.reload();
+      });
+    } else {
+      $('#panel').hidden = false;
+      document.querySelectorAll('.tabs .chip').forEach((b) => b.addEventListener('click', () => {
+        document.querySelectorAll('.tabs .chip').forEach((c) => c.setAttribute('aria-pressed', c === b));
+        $('#products').hidden = b.dataset.tab !== 'products';
+        $('#orders').hidden = b.dataset.tab !== 'orders';
+      }));
+
+      const form = $('#product-form');
+      let products = [];
+
+      const preview = () => { $('#preview').src = form.image_url.value; $('#preview').hidden = !form.image_url.value; };
+      form.image_url.addEventListener('input', preview);
+      $('#reset').addEventListener('click', () => { form.reset(); form.id.value = ''; $('#form-title').textContent = 'Add product'; preview(); });
+
+      async function loadProducts() {
+        const { data, error } = await sb.from('products').select('*').order('created_at', { ascending: false });
+        if (error) return toast(error.message, true);
+        products = data;
+        $('#product-rows').innerHTML = data.map((p) => `
+          <tr${p.active ? '' : ' style="opacity:.5"'}>
+            <td><img src="${esc(p.image_url)}" alt=""></td>
+            <td>${esc(p.name)}<br><span class="muted">${p.category}${p.active ? '' : ' · hidden'}</span></td>
+            <td>${rupees(p.price)}</td>
+            <td>${p.stock}</td>
+            <td><button class="small secondary" data-edit="${p.id}">Edit</button></td>
+          </tr>`).join('');
+      }
+
+      $('#product-rows').addEventListener('click', (e) => {
+        const p = products.find((x) => x.id === e.target.dataset.edit);
+        if (!p) return;
+        for (const k of ['id', 'name', 'category', 'price', 'stock', 'details', 'image_url', 'description']) form[k].value = p[k];
+        form.active.checked = p.active;
+        $('#form-title').textContent = 'Edit product';
+        preview();
+        form.scrollIntoView({ behavior: 'smooth' });
+      });
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const f = Object.fromEntries(new FormData(form));
+        const row = { ...f, price: Number(f.price), stock: Number(f.stock), active: form.active.checked };
+        delete row.id;
+        const { error } = f.id
+          ? await sb.from('products').update(row).eq('id', f.id)
+          : await sb.from('products').insert(row);
+        if (error) return toast(error.message, true);
+        toast('Product saved');
+        $('#reset').click();
+        loadProducts();
+      });
+
+      async function loadOrders() {
+        const { data, error } = await sb.from('orders').select('*, order_items(name, qty, price)').order('created_at', { ascending: false });
+        if (error) return toast(error.message, true);
+        $('#order-rows').innerHTML = data.length ? data.map((o) => {
+          const a = o.address;
+          return `
+          <div class="line" style="grid-template-columns:1fr auto">
+            <div>
+              <div><strong>${rupees(o.amount_paise / 100)}</strong> · ${new Date(o.created_at).toLocaleString()} <span class="badge ${o.status}">${o.status}</span></div>
+              <div>${o.order_items.map((i) => `${esc(i.name)} × ${i.qty}`).join(', ')}</div>
+              <div class="muted">${esc(a.name)} · ${esc(a.phone)} · ${esc(a.line1)} ${esc(a.line2)}, ${esc(a.city)}, ${esc(a.state)} ${esc(a.pincode)}</div>
+              ${o.razorpay_payment_id ? `<div class="muted">Payment: ${esc(o.razorpay_payment_id)}</div>` : ''}
+            </div>
+            ${o.status === 'paid' ? `<button class="small" data-ship="${o.id}">Mark shipped</button>` : ''}
+          </div>`;
+        }).join('') : '<p class="muted">No orders yet.</p>';
+      }
+
+      $('#order-rows').addEventListener('click', async (e) => {
+        if (!e.target.dataset.ship) return;
+        const { error } = await sb.from('orders').update({ status: 'shipped' }).eq('id', e.target.dataset.ship);
+        if (error) return toast(error.message, true);
+        toast('Marked shipped');
+        loadOrders();
+      });
+
+      loadProducts();
+      loadOrders();
+    }
+  </script>
+</body>
+</html>

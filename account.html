@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Account</title>
+  <link rel="icon" href="data:,">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <link rel="stylesheet" href="css/style.css?v=8">
+</head>
+<body>
+  <header></header>
+  <main>
+    <!-- Logged out -->
+    <section id="auth" class="card" style="max-width:420px;margin:0 auto" hidden>
+      <div class="tabs">
+        <button class="chip" data-mode="login" aria-pressed="true">Login</button>
+        <button class="chip" data-mode="signup" aria-pressed="false">Sign up</button>
+      </div>
+      <form id="auth-form">
+        <label id="name-field" hidden>Full name <input name="full_name" autocomplete="name"></label>
+        <label>Email <input name="email" type="email" required autocomplete="email"></label>
+        <label>Password <input name="password" type="password" required minlength="6" autocomplete="current-password"></label>
+        <div id="captcha" class="captcha"></div>
+        <button style="width:100%">Login</button>
+      </form>
+    </section>
+
+    <!-- Logged in -->
+    <div id="me" hidden>
+      <h1>My account <button id="logout" class="small secondary" style="float:right">Log out</button></h1>
+      <div class="two-col">
+        <section class="stack">
+          <form id="profile" class="card">
+            <h2 style="margin-top:0">Profile</h2>
+            <p class="muted" id="email"></p>
+            <label>Full name <input name="full_name" autocomplete="name"></label>
+            <label>Phone <input name="phone" type="tel" autocomplete="tel"></label>
+            <button>Save</button>
+          </form>
+          <div class="card" id="addresses">
+            <h2 style="margin-top:0">Addresses</h2>
+            <div id="address-list"></div>
+            <form id="address-form">
+              <h2>Add address</h2>
+              <div class="row">
+                <label>Name <input name="name" required autocomplete="name"></label>
+                <label>Phone <input name="phone" type="tel" required pattern="[0-9+ ]{10,15}" autocomplete="tel"></label>
+              </div>
+              <label>Address line 1 <input name="line1" required autocomplete="address-line1"></label>
+              <label>Address line 2 <input name="line2" autocomplete="address-line2"></label>
+              <div class="row">
+                <label>City <input name="city" required autocomplete="address-level2"></label>
+                <label>State <input name="state" required autocomplete="address-level1"></label>
+              </div>
+              <label>Pincode <input name="pincode" required pattern="[0-9]{6}" inputmode="numeric" autocomplete="postal-code"></label>
+              <button>Save address</button>
+            </form>
+          </div>
+        </section>
+        <section class="card" id="orders">
+          <h2 style="margin-top:0">My orders</h2>
+          <div id="order-list"><p class="muted">Loading…</p></div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <script type="module">
+    import { sb, $, esc, rupees, toast, renderHeader, mountCaptcha } from './js/common.js?v=7';
+
+    const user = await renderHeader();
+    // Only follow ?next= to this shop's own pages, never to another site.
+    const nextParam = new URLSearchParams(location.search).get('next') ?? '';
+    const next = /^[a-z]+\.html(\?[\w=&-]*)?$/.test(nextParam) ? nextParam : '';
+
+    if (!user) {
+      $('#auth').hidden = false;
+      const captcha = mountCaptcha($('#captcha'));
+      let mode = 'login';
+      document.querySelectorAll('.tabs .chip').forEach((b) => b.addEventListener('click', () => {
+        mode = b.dataset.mode;
+        document.querySelectorAll('.tabs .chip').forEach((c) => c.setAttribute('aria-pressed', c === b));
+        $('#name-field').hidden = mode !== 'signup';
+        $('#auth-form button').textContent = mode === 'signup' ? 'Create account' : 'Login';
+      }));
+      $('#auth-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const f = Object.fromEntries(new FormData(e.target));
+        const captchaToken = captcha.token();
+        if ($('#captcha').childElementCount && !captchaToken) return toast('Please complete the “verify you are human” check', true);
+        const { data, error } = mode === 'signup'
+          ? await sb.auth.signUp({ email: f.email, password: f.password, options: { data: { full_name: f.full_name }, captchaToken } })
+          : await sb.auth.signInWithPassword({ email: f.email, password: f.password, options: { captchaToken } });
+        captcha.reset();
+        if (error) return toast(error.message, true);
+        if (!data.session) return toast('Check your email to confirm your account, then log in.');
+        location.replace(next || 'account.html');
+      });
+    } else {
+      $('#me').hidden = false;
+      $('#email').textContent = user.email;
+      $('#logout').addEventListener('click', async () => { await sb.auth.signOut(); location.href = 'index.html'; });
+
+      const { data: profile } = await sb.from('profiles').select('full_name, phone').eq('id', user.id).single();
+      $('#profile').full_name.value = profile?.full_name ?? '';
+      $('#profile').phone.value = profile?.phone ?? '';
+      $('#profile').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const { full_name, phone } = Object.fromEntries(new FormData(e.target));
+        const { error } = await sb.from('profiles').update({ full_name, phone }).eq('id', user.id);
+        toast(error ? error.message : 'Profile saved', !!error);
+      });
+
+      async function loadAddresses() {
+        const { data } = await sb.from('addresses').select('*').order('created_at');
+        $('#address-list').innerHTML = data?.length ? data.map((a) => `
+          <div class="line" style="grid-template-columns:1fr auto">
+            <div>${esc(a.name)} · ${esc(a.phone)}<br><span class="muted">${esc(a.line1)} ${esc(a.line2)}, ${esc(a.city)}, ${esc(a.state)} ${esc(a.pincode)}</span></div>
+            <button class="small secondary" data-del="${a.id}">Delete</button>
+          </div>`).join('') : '<p class="muted">No addresses yet.</p>';
+      }
+      $('#address-list').addEventListener('click', async (e) => {
+        if (!e.target.dataset.del) return;
+        const { error } = await sb.from('addresses').delete().eq('id', e.target.dataset.del);
+        if (error) toast(error.message, true);
+        loadAddresses();
+      });
+      $('#address-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const { error } = await sb.from('addresses').insert(Object.fromEntries(new FormData(e.target)));
+        if (error) return toast(error.message, true);
+        e.target.reset();
+        toast('Address saved');
+        if (next) location.href = next;
+        loadAddresses();
+      });
+      loadAddresses();
+
+      const { data: orders } = await sb.from('orders').select('*, order_items(name, price, qty)').order('created_at', { ascending: false });
+      $('#order-list').innerHTML = orders?.length ? orders.map((o) => `
+        <div class="line" style="grid-template-columns:1fr auto">
+          <div>
+            <div><strong>${rupees(o.amount_paise / 100)}</strong> · ${new Date(o.created_at).toLocaleDateString()}</div>
+            <div class="muted">${o.order_items.map((i) => `${esc(i.name)} × ${i.qty}`).join(', ')}</div>
+          </div>
+          <span class="badge ${o.status}">${o.status === 'pending' ? 'payment pending' : o.status}</span>
+        </div>`).join('') : '<p class="muted">No orders yet.</p>';
+    }
+  </script>
+</body>
+</html>

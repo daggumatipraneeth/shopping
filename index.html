@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shop</title>
+  <link rel="icon" href="data:,">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <link rel="stylesheet" href="css/style.css?v=8">
+</head>
+<body>
+  <header></header>
+  <main>
+    <section class="hero">
+      <div>
+        <h1>Something to read, something to wear.</h1>
+        <p>A small edit of favourite books and dresses, picked by hand and delivered across India.</p>
+        <div class="actions">
+          <button data-jump="book">Shop books</button>
+          <button class="secondary" data-jump="dress">Shop dresses</button>
+        </div>
+      </div>
+      <div class="pair" aria-hidden="true">
+        <img src="https://covers.openlibrary.org/b/isbn/9780141439518-L.jpg" alt="">
+        <img src="https://images.unsplash.com/photo-1496747611176-843222e1e57c?w=600" alt="">
+      </div>
+    </section>
+    <div class="toolbar" id="catalog">
+      <button class="chip" data-cat="" aria-pressed="true">All</button>
+      <button class="chip" data-cat="book" aria-pressed="false">Books</button>
+      <button class="chip" data-cat="dress" aria-pressed="false">Dresses</button>
+      <input id="search" type="search" placeholder="Search…" aria-label="Search products">
+    </div>
+    <div id="grid" class="grid"><p class="muted">Loading…</p></div>
+  </main>
+
+  <script type="module">
+    import { sb, $, esc, rupees, toast, renderHeader, addToCart } from './js/common.js?v=7';
+
+    await renderHeader();
+    const { data: products, error } = await sb.from('products').select('*').eq('active', true).order('created_at');
+    if (error) toast(error.message, true);
+    let cat = '';
+
+    function render() {
+      const q = $('#search').value.trim().toLowerCase();
+      const list = (products ?? []).filter((p) =>
+        (!cat || p.category === cat) && (!q || `${p.name} ${p.details} ${p.description}`.toLowerCase().includes(q)));
+      $('#grid').innerHTML = list.length ? list.map((p) => `
+        <article class="product">
+          <a href="product.html?id=${p.id}" tabindex="-1" aria-hidden="true"><img src="${esc(p.image_url)}" alt="" loading="lazy"></a>
+          <div class="body">
+            <a class="name" href="product.html?id=${p.id}">${esc(p.name)}</a>
+            <span class="muted">${esc(p.details)}</span>
+            <span class="price">${rupees(p.price)}</span>
+            ${p.stock > 0
+              ? `<button data-add="${p.id}">Add to cart</button>`
+              : `<button disabled>Out of stock</button>`}
+          </div>
+        </article>`).join('') : '<p class="muted">No products found.</p>';
+    }
+
+    document.querySelectorAll('.chip').forEach((b) => b.addEventListener('click', () => {
+      cat = b.dataset.cat;
+      document.querySelectorAll('.chip').forEach((c) => c.setAttribute('aria-pressed', c === b));
+      render();
+    }));
+    $('#search').addEventListener('input', render);
+    document.querySelectorAll('[data-jump]').forEach((b) => b.addEventListener('click', () => {
+      document.querySelector(`.chip[data-cat="${b.dataset.jump}"]`).click();
+      $('#catalog').scrollIntoView({ behavior: 'smooth' });
+    }));
+
+    $('#grid').addEventListener('click', (e) => {
+      const id = e.target.dataset.add;
+      if (id) addToCart(products.find((p) => p.id === id));
+    });
+
+    render();
+  </script>
+</body>
+</html>

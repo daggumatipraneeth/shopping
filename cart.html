@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cart</title>
+  <link rel="icon" href="data:,">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+  <link rel="stylesheet" href="css/style.css?v=8">
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+</head>
+<body>
+  <header></header>
+  <main>
+    <h1>Your cart</h1>
+    <div class="two-col">
+      <section class="card">
+        <div id="lines"><p class="muted">Loading…</p></div>
+        <div class="total"><span>Total</span><span id="total">₹0</span></div>
+      </section>
+      <section class="card stack">
+        <h2 style="margin-top:0">Deliver to</h2>
+        <div id="addresses"></div>
+        <a href="account.html?next=cart.html#addresses">+ Add a new address</a>
+        <button id="pay" style="width:100%">Pay now</button>
+      </section>
+    </div>
+  </main>
+
+  <script type="module">
+    import { sb, $, esc, rupees, toast, renderHeader, refreshCartBadge, callFn } from './js/common.js?v=7';
+    import { SHOP_NAME } from './js/config.js?v=7';
+
+    const user = await renderHeader();
+    if (!user) {
+      // replace() keeps this page out of history so Back returns to where the user came from.
+      location.replace('account.html?next=cart.html');
+      await new Promise(() => {}); // stop here; nothing below should render while leaving
+    }
+    let items = [];
+
+    async function load() {
+      const { data } = await sb.from('cart_items').select('qty, products(id, name, price, image_url, stock, details)');
+      items = data ?? [];
+      $('#lines').innerHTML = items.length ? items.map(({ qty, products: p }) => `
+        <div class="line">
+          <img src="${esc(p.image_url)}" alt="">
+          <div>
+            <div>${esc(p.name)}</div>
+            <div class="muted">${rupees(p.price)} each</div>
+            <div class="qty">
+              <button class="small secondary" data-id="${p.id}" data-delta="-1" aria-label="Decrease">−</button>
+              <span>${qty}</span>
+              <button class="small secondary" data-id="${p.id}" data-delta="1" aria-label="Increase">+</button>
+              <button class="small secondary" data-id="${p.id}" data-delta="remove">Remove</button>
+            </div>
+          </div>
+          <strong>${rupees(p.price * qty)}</strong>
+        </div>`).join('') : '<p class="muted">Cart is empty. <a href="index.html">Continue shopping</a></p>';
+      $('#total').textContent = rupees(items.reduce((s, i) => s + i.products.price * i.qty, 0));
+      $('#pay').disabled = !items.length;
+      refreshCartBadge();
+    }
+
+    $('#lines').addEventListener('click', async (e) => {
+      const { id, delta } = e.target.dataset;
+      if (!id) return;
+      const item = items.find((i) => i.products.id === id);
+      const qty = delta === 'remove' ? 0 : item.qty + Number(delta);
+      if (qty > item.products.stock) return toast(`Only ${item.products.stock} in stock`, true);
+      const q = qty <= 0
+        ? sb.from('cart_items').delete().eq('product_id', id)
+        : sb.from('cart_items').update({ qty }).eq('product_id', id);
+      const { error } = await q;
+      if (error) toast(error.message, true);
+      load();
+    });
+
+    const { data: addresses } = await sb.from('addresses').select('*').order('created_at');
+    $('#addresses').innerHTML = addresses?.length ? addresses.map((a, i) => `
+      <label class="check"><input type="radio" name="address" value="${a.id}" ${i === 0 ? 'checked' : ''}>
+        <span>${esc(a.name)}, ${esc(a.line1)}, ${esc(a.city)} ${esc(a.pincode)}</span></label>`).join('')
+      : '<p class="muted">No saved address yet.</p>';
+
+    async function verify(payment) {
+      await callFn('verify-payment', payment);
+      toast('Payment successful!');
+      setTimeout(() => (location.href = 'account.html#orders'), 800);
+    }
+
+    $('#pay').addEventListener('click', async () => {
+      const address_id = document.querySelector('input[name=address]:checked')?.value;
+      if (!address_id) return toast('Add a delivery address first', true);
+      $('#pay').disabled = true;
+      try {
+        const order = await callFn('create-order', { address_id });
+        if (order.mock) {
+          // Local dev without Razorpay keys: simulate a successful payment.
+          toast('Test mode: simulating payment');
+          return await verify({ razorpay_order_id: order.razorpay_order_id, razorpay_payment_id: 'mock_pay_' + Date.now() });
+        }
+        new Razorpay({
+          key: order.key,
+          amount: order.amount,
+          currency: order.currency,
+          name: SHOP_NAME,
+          description: 'Order',
+          order_id: order.razorpay_order_id,
+          prefill: { email: user.email, contact: addresses.find((a) => a.id === address_id)?.phone },
+          handler: (r) => verify(r).catch((err) => toast(err.message, true)),
+          modal: { ondismiss: () => { toast('Payment cancelled'); $('#pay').disabled = false; } },
+          theme: { color: '#111111' },
+        }).open();
+      } catch (err) {
+        toast(err.message, true);
+        $('#pay').disabled = false;
+      }
+    });
+
+    load();
+  </script>
+</body>
+</html>
