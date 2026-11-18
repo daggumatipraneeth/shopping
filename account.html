@@ -6,7 +6,7 @@
   <title>Account</title>
   <link rel="icon" href="data:,">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
-  <link rel="stylesheet" href="css/style.css?v=8">
+  <link rel="stylesheet" href="css/style.css?v=10">
 </head>
 <body>
   <header></header>
@@ -60,14 +60,15 @@
         </section>
         <section class="card" id="orders">
           <h2 style="margin-top:0">My orders</h2>
-          <div id="order-list"><p class="muted">Loading…</p></div>
+          <p id="paid-note" class="notice" role="status" hidden>Payment received. Thank you, your order is confirmed.</p>
+          <div id="order-list"><div class="loading"><div class="spinner" role="status" aria-label="Loading"></div></div></div>
         </section>
       </div>
     </div>
   </main>
 
   <script type="module">
-    import { sb, $, esc, rupees, toast, renderHeader, mountCaptcha } from './js/common.js?v=7';
+    import { sb, $, esc, rupees, toast, renderHeader, mountCaptcha } from './js/common.js?v=8';
 
     const user = await renderHeader();
     // Only follow ?next= to this shop's own pages, never to another site.
@@ -89,10 +90,15 @@
         const f = Object.fromEntries(new FormData(e.target));
         const captchaToken = captcha.token();
         if ($('#captcha').childElementCount && !captchaToken) return toast('Please complete the “verify you are human” check', true);
+        const button = $('#auth-form button');
+        const label = button.textContent;
+        button.textContent = 'Please wait…';
+        button.disabled = true;
         const { data, error } = mode === 'signup'
           ? await sb.auth.signUp({ email: f.email, password: f.password, options: { data: { full_name: f.full_name }, captchaToken } })
           : await sb.auth.signInWithPassword({ email: f.email, password: f.password, options: { captchaToken } });
         captcha.reset();
+        if (error || !data.session) { button.textContent = label; button.disabled = false; }
         if (error) return toast(error.message, true);
         if (!data.session) return toast('Check your email to confirm your account, then log in.');
         location.replace(next || 'account.html');
@@ -101,7 +107,15 @@
       $('#me').hidden = false;
       $('#email').textContent = user.email;
       $('#logout').addEventListener('click', async () => { await sb.auth.signOut(); location.href = 'index.html'; });
+      if (new URLSearchParams(location.search).has('paid')) {
+        $('#paid-note').hidden = false;
+        history.replaceState(null, '', 'account.html#orders'); // a refresh shouldn't repeat the message
+      }
 
+      // Fetch orders alongside the profile instead of after it.
+      // Customers see only orders they paid for; unpaid checkouts ('pending', or 'cancelled' when Razorpay
+      // refused the order) stay hidden.
+      const ordersQuery = sb.from('orders').select('*, order_items(name, price, qty)').in('status', ['paid', 'shipped']).order('created_at', { ascending: false });
       const { data: profile } = await sb.from('profiles').select('full_name, phone').eq('id', user.id).single();
       $('#profile').full_name.value = profile?.full_name ?? '';
       $('#profile').phone.value = profile?.phone ?? '';
@@ -137,15 +151,17 @@
       });
       loadAddresses();
 
-      const { data: orders } = await sb.from('orders').select('*, order_items(name, price, qty)').order('created_at', { ascending: false });
+      const { data: orders } = await ordersQuery;
       $('#order-list').innerHTML = orders?.length ? orders.map((o) => `
         <div class="line" style="grid-template-columns:1fr auto">
           <div>
             <div><strong>${rupees(o.amount_paise / 100)}</strong> · ${new Date(o.created_at).toLocaleDateString()}</div>
             <div class="muted">${o.order_items.map((i) => `${esc(i.name)} × ${i.qty}`).join(', ')}</div>
           </div>
-          <span class="badge ${o.status}">${o.status === 'pending' ? 'payment pending' : o.status}</span>
+          <span class="badge ${o.status}">${o.status}</span>
         </div>`).join('') : '<p class="muted">No orders yet.</p>';
+      // On phones the orders sit below the forms; bring the new order into view after paying.
+      if (!$('#paid-note').hidden) $('#orders').scrollIntoView({ block: 'start' });
     }
   </script>
 </body>

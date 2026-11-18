@@ -6,7 +6,7 @@
   <title>Shop</title>
   <link rel="icon" href="data:,">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
-  <link rel="stylesheet" href="css/style.css?v=8">
+  <link rel="stylesheet" href="css/style.css?v=10">
 </head>
 <body>
   <header></header>
@@ -31,14 +31,15 @@
       <button class="chip" data-cat="dress" aria-pressed="false">Dresses</button>
       <input id="search" type="search" placeholder="Search…" aria-label="Search products">
     </div>
-    <div id="grid" class="grid"><p class="muted">Loading…</p></div>
+    <div id="grid" class="grid"><div class="loading"><div class="spinner" role="status" aria-label="Loading"></div></div></div>
   </main>
 
   <script type="module">
-    import { sb, $, esc, rupees, toast, renderHeader, addToCart } from './js/common.js?v=7';
+    import { sb, $, esc, rupees, toast, renderHeader, addToCart } from './js/common.js?v=8';
 
+    const productsQuery = sb.from('products').select('*').eq('active', true).order('created_at'); // start before the header
     await renderHeader();
-    const { data: products, error } = await sb.from('products').select('*').eq('active', true).order('created_at');
+    const { data: products, error } = await productsQuery;
     if (error) toast(error.message, true);
     let cat = '';
 

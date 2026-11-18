@@ -136,6 +136,27 @@ td img { width: 40px; height: 50px; object-fit: cover; }
 .two-col { display: grid; gap: 16px; }
 @media (min-width: 800px) { .two-col { grid-template-columns: 1fr 1fr; align-items: start; } }
 
+/* Soft cross-fade between pages (Chrome/Edge 126+, Safari 18.2+; others just navigate normally). */
+@view-transition { navigation: auto; }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: .18s; }
+header { min-height: 58px; } /* reserve space before JS fills it, so content doesn't jump */
+
+.spinner {
+  width: 28px; height: 28px; border: 2px solid var(--line); border-top-color: var(--text);
+  border-radius: 50%; animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading { display: flex; justify-content: center; padding: 48px 0; grid-column: 1 / -1; }
+.notice { border: 1px solid var(--text); padding: 10px 14px; margin: 0 0 12px; }
+.busy {
+  position: fixed; inset: 0; z-index: 200; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; background: rgba(255, 255, 255, .94); font-size: 1.05rem; text-align: center; padding: 16px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 2s; }
+  ::view-transition-old(root), ::view-transition-new(root) { animation: none; }
+}
+
 .toast {
   position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 100;
   background: var(--text); color: #fff; padding: 12px 18px; border-radius: 2px; max-width: calc(100% - 32px);

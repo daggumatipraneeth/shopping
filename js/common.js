@@ -1,4 +1,4 @@
-import { SHOP_NAME, SUPABASE_URL, SUPABASE_ANON_KEY, TURNSTILE_SITE_KEY } from './config.js?v=7';
+import { SHOP_NAME, SUPABASE_URL, SUPABASE_ANON_KEY, TURNSTILE_SITE_KEY } from './config.js?v=8';
 
 // supabase-js is loaded as a plain <script> in each page (one file; the +esm build trips Safari).
 const { createClient } = window.supabase;
@@ -33,6 +33,17 @@ export function toast(msg, isError = false) {
   el.textContent = msg;
   document.body.append(el);
   setTimeout(() => el.remove(), 3500);
+}
+
+// Full-screen "please wait" layer for slow steps (payment confirmation). Returns a function that removes it.
+export function busy(text) {
+  const el = document.createElement('div');
+  el.className = 'busy';
+  el.setAttribute('role', 'alert');
+  el.setAttribute('aria-live', 'assertive');
+  el.innerHTML = `<div class="spinner" aria-hidden="true"></div><p>${esc(text)}</p>`;
+  document.body.append(el);
+  return () => el.remove();
 }
 
 export async function cartCount() {

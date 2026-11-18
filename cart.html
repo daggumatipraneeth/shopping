@@ -6,7 +6,7 @@
   <title>Cart</title>
   <link rel="icon" href="data:,">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
-  <link rel="stylesheet" href="css/style.css?v=8">
+  <link rel="stylesheet" href="css/style.css?v=10">
   <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 </head>
 <body>
@@ -15,7 +15,7 @@
     <h1>Your cart</h1>
     <div class="two-col">
       <section class="card">
-        <div id="lines"><p class="muted">Loading…</p></div>
+        <div id="lines"><div class="loading"><div class="spinner" role="status" aria-label="Loading"></div></div></div>
         <div class="total"><span>Total</span><span id="total">₹0</span></div>
       </section>
       <section class="card stack">
@@ -28,8 +28,8 @@
   </main>
 
   <script type="module">
-    import { sb, $, esc, rupees, toast, renderHeader, refreshCartBadge, callFn } from './js/common.js?v=7';
-    import { SHOP_NAME } from './js/config.js?v=7';
+    import { sb, $, esc, rupees, toast, renderHeader, refreshCartBadge, callFn, busy } from './js/common.js?v=8';
+    import { SHOP_NAME } from './js/config.js?v=8';
 
     const user = await renderHeader();
     if (!user) {
@@ -82,16 +82,26 @@
         <span>${esc(a.name)}, ${esc(a.line1)}, ${esc(a.city)} ${esc(a.pincode)}</span></label>`).join('')
       : '<p class="muted">No saved address yet.</p>';
 
+    const payButton = (label, disabled) => { $('#pay').textContent = label; $('#pay').disabled = disabled; };
+
+    // Runs right after Razorpay closes: show progress at once, confirm with the server, then go to orders.
     async function verify(payment) {
-      await callFn('verify-payment', payment);
-      toast('Payment successful!');
-      setTimeout(() => (location.href = 'account.html#orders'), 800);
+      const done = busy('Confirming your payment…');
+      try {
+        await callFn('verify-payment', payment);
+        location.replace('account.html?paid=1#orders');
+      } catch (err) {
+        done();
+        payButton('Pay now', false);
+        // The Razorpay webhook still records a real payment even if this check failed.
+        toast('We couldn’t confirm the payment here. If money was taken, the order will appear in My account shortly.', true);
+      }
     }
 
     $('#pay').addEventListener('click', async () => {
       const address_id = document.querySelector('input[name=address]:checked')?.value;
       if (!address_id) return toast('Add a delivery address first', true);
-      $('#pay').disabled = true;
+      payButton('Starting payment…', true);
       try {
         const order = await callFn('create-order', { address_id });
         if (order.mock) {
@@ -107,13 +117,14 @@
           description: 'Order',
           order_id: order.razorpay_order_id,
           prefill: { email: user.email, contact: addresses.find((a) => a.id === address_id)?.phone },
-          handler: (r) => verify(r).catch((err) => toast(err.message, true)),
-          modal: { ondismiss: () => { toast('Payment cancelled'); $('#pay').disabled = false; } },
+          handler: verify,
+          modal: { ondismiss: () => { toast('Payment cancelled'); payButton('Pay now', false); } },
           theme: { color: '#111111' },
         }).open();
+        payButton('Complete payment in the Razorpay window', true);
       } catch (err) {
         toast(err.message, true);
-        $('#pay').disabled = false;
+        payButton('Pay now', false);
       }
     });
 
